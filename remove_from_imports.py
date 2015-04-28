@@ -44,8 +44,6 @@ cause it to operate on all "from module import foo" imports.
 
 from __future__ import print_function
 
-BUILTINS = frozenset(dir()) | frozenset(dir(__builtins__))
-
 import argparse
 import ast
 import collections
@@ -101,8 +99,8 @@ def find_origin(module, name):
 
 @analysis.Scoped
 @walkers.Walker
-def remove_from_imports(tree, scope, package, imported_names, other_names,
-                        remove_all, set_ctx, collect, **kws):
+def remove_from_imports(
+    tree, scope, package, imported_names, remove_all, set_ctx, collect, **kws):
     '''Traverses an AST to find import statements and names that need to
     be changed.
 
@@ -121,15 +119,15 @@ def remove_from_imports(tree, scope, package, imported_names, other_names,
             the file mapping to tuples of the line number, column offset, and 
             a tuple of the module and the name as it exists in the module it
             came from.  
-        other_names: Names from other imports, as a set.
         set_ctx: A function passing changed arguments down recursive calls, see
             macropy.core.walkers.Walker.
         collect: Appends a value to a list which will be returned by 
             remove_from_imports.collect(), see macropy.core.walkers.Walker.
 
     Returns:
-        A tuple of a rewritten AST and/or a list of tuples as found in the 
-        values of imported_names.
+        A rewritten AST (using .recurse()), a list of tuples as found in the 
+        values of imported_names (using .collect()), or both, using 
+        .recurse_collect(), macropy.core.walkers.Walker.
 
     '''
     logging.debug('AST: %s', ast.dump(tree))
@@ -164,28 +162,11 @@ def remove_from_imports(tree, scope, package, imported_names, other_names,
         set_ctx(imported_names=imported_names)
         return ast.Import([ast.alias(m, None) for m in sorted(origins)])
 
-    # With missing name checking removed, this is also no longer
-    # necessary.
-    elif isinstance(tree, ast.Import):
-        for alias in tree.names:
-            if alias.asname:
-                other_names.add(alias.asname)
-            else:
-                other_names.add(alias.name)
-        # logging.info('Other Names: %s', other_names)
-        set_ctx(other_names=other_names)
-        return tree
-
-    # This conditional originally checked for missing names using
-    # other_names, but Macropy's Scoped() doesn't capture all the
-    # names so can produce spurious errors.
     elif (isinstance(tree, ast.Name) and isinstance(tree.ctx, ast.Load) and
     tree.id not in scope and tree.id in imported_names):
-    # tree.id not in other_names
         logging.info('Lineno: %i', tree.lineno)
         logging.info(ast.dump(tree))
         collect((tree.lineno, tree.col_offset, imported_names[tree.id]))
-        # Rewriting the tree is no longer strictly necessary.
         return ast.Name(
             '%s.%s' % (imported_names[tree.id][0], tree.id), tree.ctx)
 
@@ -292,7 +273,7 @@ if __name__ == '__main__':
         try:
             change_list = remove_from_imports.collect(
                 ast.parse(original), package=package, imported_names={},
-                other_names=set(BUILTINS), remove_all=args.all)
+                remove_all=args.all)
         except Exception:
             logging.error(traceback.format_exc())
             continue
