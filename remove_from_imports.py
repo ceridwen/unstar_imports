@@ -150,14 +150,14 @@ def remove_from_imports(
                         imported_names[name] = (origin, name)
         elif remove_all:
             for alias in tree.names:
+                origin = find_origin(module, alias.name)
+                origins.add(origin)
                 if alias.asname:
-                    origin = find_origin(module, alias.name)
-                    origins.add(origin)
                     imported_names[alias.asname] = (origin, alias.name)
                 else:
-                    origin = find_origin(module, alias.name)
-                    origins.add(origin)
                     imported_names[alias.name] = (origin, alias.name)
+        else:
+            return tree
         logging.info('Imported Names: %s', imported_names)
         set_ctx(imported_names=imported_names)
         return ast.Import([ast.alias(m, None) for m in sorted(origins)])
@@ -171,10 +171,14 @@ def remove_from_imports(
             '%s.%s' % (imported_names[tree.id][0], tree.id), tree.ctx)
 
 
-from_import = re.compile(r'\s*from\s+([.\w]+)\s+import\s+([.*\w, ]+)')
-comment_string_whitespace = re.compile(r'''\s*['"#]|\s+''')
+FROM_IMPORT = r'\s*from\s+(%s)\s+import\s+(%s)'
+from_future_import = re.compile(FROM_IMPORT % ('__future__', r'[\w, ]+'))
+from_import_star = re.compile(FROM_IMPORT % (r'[.\w]+', r'\*'))
+from_import = re.compile(FROM_IMPORT % (r'[.\w]+', r'[\w., *]+'))
+comment_string_whitespace = re.compile(
+    r'''^\s*(#.*|'[^']*'|'{3}.*?'{3}|"[^"]*"|"{3}.*?"{3}|\s)$''')
 
-script_comment = '''
+SCRIPT_COMMENT = '''
 # Imports added by remove_from_imports.
 '''
 
@@ -190,38 +194,69 @@ def write_changes(original, modules, changes, refactored, remove_all):
         remove_all: If true, refactors all "from module import foo" statements.
     '''
     lines = enumerate(original.splitlines(), 1)
-    for _, line in lines:
-        if (comment_string_whitespace.match(line) or
-            (from_import.match(line) and
-             from_import.match(line).group(1) == '__future__')):
-            refactored.write(line + '\n')
-        else:
-            refactored.write('\n')
-            refactored.write(script_comment)
-            refactored.write('\n')
-            for module in modules:
-                logging.info('import %s', module)
-                refactored.write('import %s\n' % module)
-            refactored.write('\n')
-            refactored.write(line + '\n')
-            break
 
+    # This loop catches the leading elements of Python source files,
+    # docstrings (string literals, whether split over multiple lines
+    # or one line), comments (including shebang lines), from
+    # __future__ imports, and white space, echoing them to the output
+    # without change.  When it encounters the first line of real code
+    # that isn't from a from __future__ import, it should stop.  It
+    # should be impossible for any of these preamble lines to contain
+    # names that would need to be changed in a syntactically-correct
+    # Python file.
+    multiline_string = None
     for lineno, line in lines:
-        match = from_import.match(line)
-        if match and (match.group(2) == '*' or remove_all):
-            continue
-        if lineno in changes:
+        logging.info('Lineno, Multiline: %s, %s', lineno, multiline_string)
+        logging.debug(
+            'Comment, string, or whitespace: %s',
+            comment_string_whitespace.match(line))
+        if (comment_string_whitespace.match(line) or
+            from_future_import.match(line)):
+            pass
+        elif multiline_string:
+            if multiline_string in line:
+                multiline_string = None
+        elif line.strip().startswith("'''") or line.strip().startswith('"""'):
+            multiline_string = line.strip()[0:3]
+        else:
+            break
+        refactored.write(line + '\n')
+
+    # This writes all the modules needed as 'import module' statements.
+    refactored.write('\n')
+    refactored.write(SCRIPT_COMMENT)
+    refactored.write('\n')
+    for module in modules:
+        logging.info('import %s', module)
+        refactored.write('import %s\n' % module)
+    refactored.write('\n')
+
+    # This loop uses the changes dict to write changed lines (as
+    # needed) and unchanged lines to the output while skipping all
+    # "from module import" lines that are being removed..  Using a
+    # while loop with an explicit catch of StopIteration allows it to
+    # act on the first line of code, which is the last line found by
+    # the previous for loop.
+    while True:
+        if (from_import_star.match(line) or
+            (from_import.match(line) and remove_all)):
+            logging.info(from_import.match(line))
+        elif lineno in changes:
             new_line = []
             cur_offset = 0
             for offset, module, name in changes[lineno]:
                 new_line.extend(
                     [line[cur_offset:offset], '%s.%s' % (module, name)])
-                cur_offset += offset + len(name)
+                cur_offset = offset + len(name)
             new_line.extend([line[cur_offset:], '\n'])
             logging.info(new_line)
             refactored.write(''.join(new_line))
         else:
             refactored.write(line + '\n')
+        try:
+            lineno, line = next(lines)
+        except StopIteration:
+            break
 
 
 if __name__ == '__main__':
@@ -236,7 +271,7 @@ if __name__ == '__main__':
         '-o', '--output-dir', type=pathlib.Path,
         help='Put modified files in this directory.  Overrides -w.')
     arg_parser.add_argument(
-        '-w', '--write',
+        '-w', '--write', action='store_true',
         help='Write back modified files, creating backup files in the same directory.')
     arg_parser.add_argument(
         '-a', '--all', action='store_true',
@@ -252,6 +287,21 @@ if __name__ == '__main__':
     for file_name in args.files:
         print('File: %s' % file_name)
         path = pathlib.Path(file_name).resolve()
+
+        # This assumes that the package containing file_name is in
+        # sys.path and that the directory containing the package is a
+        # direct subdirectory of some sys.path entry.  This has the
+        # potential to fail on Python 3.2, 2.7, and earlier because
+        # Python requires an __init__.py to recognize a directory as a
+        # package if the direct subdirectory isn't a package but
+        # contains one.  On the other hand, on Python 3.3+, requiring
+        # an __init__.py file can fail to recognize a valid package
+        # because it's no longer required.  See my question at
+        # https://stackoverflow.com/q/29826934/3857947 There are other
+        # possible ways for this to fail, with packages containing an
+        # __init__.py that sets __path__ and other dynamic import
+        # functionality.  Most of them can be fixed with an
+        # appropriate choice of the --path command line argument.
         for python_path in map(pathlib.Path, sys.path):
             try:
                 package_path = path.relative_to(python_path)
