@@ -127,7 +127,7 @@ def remove_from_imports(
     Returns:
         A rewritten AST (using .recurse()), a list of tuples as found in the 
         values of imported_names (using .collect()), or both, using 
-        .recurse_collect(), macropy.core.walkers.Walker.
+        .recurse_collect(), see macropy.core.walkers.Walker.
 
     '''
     logging.debug('AST: %s', ast.dump(tree))
@@ -233,7 +233,7 @@ def write_changes(original, modules, changes, refactored, remove_all):
 
     # This loop uses the changes dict to write changed lines (as
     # needed) and unchanged lines to the output while skipping all
-    # "from module import" lines that are being removed..  Using a
+    # "from module import" lines that are being removed.  Using a
     # while loop with an explicit catch of StopIteration allows it to
     # act on the first line of code, which is the last line found by
     # the previous for loop.
@@ -275,7 +275,7 @@ if __name__ == '__main__':
         help='Write back modified files, creating backup files in the same directory.')
     arg_parser.add_argument(
         '-a', '--all', action='store_true',
-        help='Remove all "from module import foo" statements.')
+        help='Remove all "from module import foo" statements rather than only "from module import *" statements.')
     arg_parser.add_argument(
         '-v', '--verbose', action='count', default=0, help='Verbose output.')
     args = arg_parser.parse_args()
@@ -293,15 +293,16 @@ if __name__ == '__main__':
         # direct subdirectory of some sys.path entry.  This has the
         # potential to fail on Python 3.2, 2.7, and earlier because
         # Python requires an __init__.py to recognize a directory as a
-        # package if the direct subdirectory isn't a package but
-        # contains one.  On the other hand, on Python 3.3+, requiring
-        # an __init__.py file can fail to recognize a valid package
-        # because it's no longer required.  See my question at
-        # https://stackoverflow.com/q/29826934/3857947 There are other
-        # possible ways for this to fail, with packages containing an
-        # __init__.py that sets __path__ and other dynamic import
-        # functionality.  Most of them can be fixed with an
-        # appropriate choice of the --path command line argument.
+        # package, even if it's a direct subdirectory on sys.path.  On
+        # the other hand, on Python 3.3+, requiring that a directory
+        # have an __init__.py to count can fail to recognize a valid
+        # package because an __init__.py is no longer required.  See
+        # my question at https://stackoverflow.com/q/29826934/3857947
+        # .  There are other possible ways for this to fail, with
+        # packages containing an __init__.py that sets __path__ and
+        # other dynamic import functionality.  Most of them can be
+        # fixed with an appropriate choice of the --path command line
+        # argument.
         for python_path in map(pathlib.Path, sys.path):
             try:
                 package_path = path.relative_to(python_path)
