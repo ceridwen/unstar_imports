@@ -23,8 +23,7 @@ This script automates the process of replacing them.
 
 This script requires Macropy, but does not use any macros.  It also
 needs two bugfixes in Macropy's python3 branch that can be found in my
-fork of Macropy at commit
-https://github.com/ceridwen/macropy/commit/a093c2d1c5685acfafa756bbdce3a1776aeafc38
+fork of Macropy at https://github.com/ceridwen/macropy/tree/python3
 that haven't yet been accepted into the main Macropy repository.  I
 haven't tested it yet on 2.7 , but it should probably work with a
 backported version of the fix for `with` statements.
